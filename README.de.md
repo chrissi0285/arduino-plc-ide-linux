@@ -11,9 +11,9 @@ einem Arduino Opta mit Laufzeitumgebung 1.34.2:
     Target runtime version: 1.34.2
     Target system info: 1.2.0 ArduinoOpta
 
-## Version 1.1.0 verwenden — ältere sind unter Wine defekt
+## Version 1.1.0 verwenden
 
-**Version 1.0.8 funktioniert unter Wine nicht.** Sie meldet beim Start:
+**Version 1.0.8 meldet beim Start:**
 
     Can not load device template 'LogicLab.pct' from Catalog!
     Resources configuration will not be loaded.
@@ -23,21 +23,24 @@ Geräte- und Verbindungseinstellungen — und der Verbindungsversuch scheitert m
 „Unable to start the communication", ohne dass die IDE die serielle
 Schnittstelle überhaupt öffnet.
 
-Das liegt **nicht** an der Wine-Einrichtung. Einzeln geprüft und ausgeschlossen:
-fehlende Dateien, Groß-/Kleinschreibung der Pfade, MSXML, die COM-Registrierung
-aller sechs Komponenten, die XML-Validierung im Template, die Bibliothek
-ToolkitPro (in beiden Fassungen byte-identisch), der Registrierungseintrag
-`Arduino\ArduinoPLC\InstallPath` und die Schriftarten. Version 1.0.3 startet
-unter derselben Wine-Einrichtung sauber — die Ursache liegt also im Programmcode
-von 1.0.8.
+**Die Ursache ist Wine-Gecko** (siehe unten): In jenem Prefix war es
+installiert. Nimmt man es heraus, meldet auch 1.0.8 den Katalogfehler nicht mehr
+und lädt den Projektbaum.
 
-**1.1.0 behebt das.** Der Gerätekatalog lädt, der Reiter *Resources* ist da, und
-nebenbei verschwindet auch der Darstellungsfehler im Ausgabefenster, bei dem
-jeder Buchstabe um 90 Grad gedreht war.
+Einzeln geprüft und als Ursache ausgeschlossen wurden vorher: fehlende Dateien,
+Groß-/Kleinschreibung der Pfade, MSXML, die COM-Registrierung aller sechs
+Komponenten, die XML-Validierung im Template, die Bibliothek ToolkitPro (in
+beiden Fassungen byte-identisch), der Registrierungseintrag
+`Arduino\ArduinoPLC\InstallPath` und die Schriftarten.
 
-Version 1.0.3 taugt nicht als Ausweg: Ihr Katalog kennt nur `ArduinoOpta_1p0`.
-Kopiert man die neueren Gerätedefinitionen hinein, stürzt sie beim Öffnen eines
-mit 1.0.8 erstellten Projekts ab.
+**Trotzdem ist 1.1.0 die bessere Wahl.** Auch ohne Gecko blieb 1.0.8 beim
+Schritt „Loading resources tree…" hängen, und der Darstellungsfehler im
+Ausgabefenster — jeder Buchstabe um 90 Grad gedreht — tritt nur dort auf. In
+1.1.0 sind beide Punkte behoben.
+
+Version 1.0.3 taugt ebenfalls nicht: Ihr Katalog kennt nur `ArduinoOpta_1p0`,
+und mit neueren Gerätedefinitionen bestückt stürzt sie beim Öffnen eines mit
+1.0.8 erstellten Projekts ab.
 
 ## Stolperstein 1: Der 1.1.0-Installer ist nur ein Downloader
 
@@ -105,6 +108,25 @@ Verbindungsdialog das Auswahlfeld umzustellen.
     winetricks -q vcrun2019 msxml3 msxml6
 
 Gestartet wird mit `WINEDLLOVERRIDES="mscoree=d"` (das Startskript setzt das).
+
+### Wine-Gecko darf NICHT installiert sein
+
+Das ist der entscheidende Punkt und am 21.09.2026 in beide Richtungen belegt:
+
+* **ohne Gecko** startet 1.1.0 sauber und verbindet sich mit dem Opta,
+* **mit Gecko** kehrt sofort der Fehler „Can not load device template
+  'LogicLab.pct' from Catalog" zurück.
+
+Wine bietet beim Anlegen eines Prefix an, Gecko zu installieren — hier lehnt man
+das ab. Ist es schon vorhanden, genügt es, die beiden Ordner
+`drive_c/windows/system32/gecko` und `drive_c/windows/syswow64/gecko`
+umzubenennen; die IDE braucht sie nicht.
+
+Das erklärt rückwirkend auch den Fehler in 1.0.8: In jenem Prefix war Gecko
+installiert. Deshalb schien `mshtml=d` dort zu helfen — dieser Schalter legt
+Wines HTML-Nachbau still, also genau die Komponente, die Gecko bereitstellt.
+Er unterdrückte allerdings nur die Meldung, während die Ressourcen-Konfiguration
+weiterhin nicht lud.
 
 ## Zugriff auf die Schnittstelle unter Linux
 

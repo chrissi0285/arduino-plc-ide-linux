@@ -15,9 +15,9 @@ Target system info: 1.2.0 ArduinoOpta
 
 *(Deutsche Fassung: [README.de.md](README.de.md))*
 
-## Use version 1.1.0 — older ones are broken under Wine
+## Use version 1.1.0
 
-**PLC IDE 1.0.8 does not work under Wine.** It fails on startup with
+**PLC IDE 1.0.8 fails on startup with**
 
 ```
 Can not load device template 'LogicLab.pct' from Catalog!
@@ -28,16 +28,21 @@ The *Resources* section is then missing from the project tree — which is where
 the device and connection settings live — and connecting fails with „Unable to
 start the communication", without the IDE ever opening the serial port.
 
-This is **not** a Wine configuration problem. Ruled out by testing, one at a
-time: missing files, path case sensitivity, MSXML, COM registration of all six
-components, XML validation in the template, the ToolkitPro library (byte-identical
-between versions), the `Arduino\ArduinoPLC\InstallPath` registry key, and fonts.
-Version 1.0.3 starts cleanly under the exact same Wine setup, so the cause is in
-1.0.8's own code.
+**The cause is Wine Gecko** (see below): that prefix had it installed. Remove it
+and 1.0.8 stops reporting the catalog error and loads the project tree too.
 
-**1.1.0 fixes it.** The device catalog loads, the *Resources* tab is there, and
-as a bonus the rotated-text glitch in the Output pane (every character turned 90°)
-is gone too.
+Ruled out beforehand, one at a time: missing files, path case sensitivity,
+MSXML, COM registration of all six components, XML validation in the template,
+the ToolkitPro library (byte-identical between versions), the
+`Arduino\ArduinoPLC\InstallPath` registry key, and fonts.
+
+**Still, prefer 1.1.0.** Even without Gecko, 1.0.8 stalls at „Loading resources
+tree…", and the rotated-text glitch in the Output pane (every character turned
+90°) only happens there. 1.1.0 fixes both.
+
+Version 1.0.3 is no alternative either: its catalog only knows
+`ArduinoOpta_1p0`, and fitted with newer device definitions it crashes when
+opening a project created with 1.0.8.
 
 ## Problem 1: the 1.1.0 installer is only a downloader
 
@@ -103,6 +108,24 @@ reboots and replugging. `plc-ide.sh` does this in the right order.
 `dosdevices/com5` at the board than to fight the combo box in the connection
 dialog.
 
+## Do NOT install Wine Gecko
+
+This is the single most important setting, verified in both directions on
+2026-09-21:
+
+* **without Gecko**, 1.1.0 starts cleanly and connects to the Opta;
+* **with Gecko installed**, the „Can not load device template 'LogicLab.pct'
+  from Catalog" error comes straight back.
+
+When Wine offers to install Gecko for a new prefix, decline. If it is already
+there, renaming `drive_c/windows/system32/gecko` and
+`drive_c/windows/syswow64/gecko` is enough — the IDE does not need them.
+
+This also explains the 1.0.8 failure in hindsight: that prefix had Gecko
+installed. It is why `mshtml=d` appeared to help there — that override disables
+Wine's HTML engine, i.e. exactly what Gecko provides. It only hid the message
+though; the resource configuration still did not load.
+
 ## Quick start
 
 ```bash
@@ -111,7 +134,7 @@ sudo apt remove brltty               # hijacks Arduino boards on USB
 
 export WINEPREFIX=~/.local/share/arduino-plc-ide/wine
 export WINEARCH=win64
-winetricks -q vcrun2019 msxml3 msxml6
+winetricks -q vcrun2019 msxml3 msxml6   # do NOT add wine_gecko
 # unpack the installer as shown above, then:
 wine a1 /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
 wine msiexec /i a0 /qn
