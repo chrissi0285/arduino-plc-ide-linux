@@ -1,183 +1,66 @@
-# Arduino PLC IDE on Linux (Wine)
+# Arduino PLC IDE on Linux: patched Wine 11
 
-The Arduino PLC IDE is Windows-only. It **does** run under Wine — including a
-working Modbus connection to an Arduino Opta — but two things stop you before
-you get there. Both are solved here.
+[Deutsch](README.de.md)
 
-Verified on 2026-09-20: PLC IDE 1.1.0 under Wine 9.0 on Linux Mint, connected to
-an Arduino Opta running PLC runtime 1.34.2:
+Community source patches tested with Arduino PLC IDE 1.1.0, Wine 11.0 and Linux Mint/Cinnamon (Muffin 6.6.3). This is not an official Arduino/Wine release or a complete binary installer.
 
+## Current verified status — 2026-09-24
+
+- Original IDE skin, ST editor, HTML device configuration, COM selection and I1–I8 mapping render correctly.
+- Offline compilation: 0 warnings, 0 errors. Project files remained unchanged.
+- Read-only Modbus connections work; repeated connect/disconnect tests passed and the IDE exits normally.
+- CommServ 12.1.0.42 starts minimized. Manual restore remains possible; disconnect ends the server process.
+- No firmware/program download, reset, halt/run, force or output switching was performed. These tests are not a device-program backup or a long-term stability guarantee.
+
+**Earlier advice to remove Gecko is superseded.** The working patched setup needs Wine Gecko (tested 2.47.4), an English numeric locale (`LC_ALL=en_US.UTF-8`), and the application's VC runtime and native MSXML dependencies. Removing Gecko or disabling the visible skin did not provide a complete repair.
+
+Use a **dedicated Wine runtime and prefix**, not a replacement for system Wine. The tested prefix also has `FEATURE_BROWSER_EMULATION` DWORD `Arduino PLC IDE.exe = 11001` under `HKCU\Software\Microsoft\Internet Explorer\Main\FeatureControl\FEATURE_BROWSER_EMULATION`. Do not apply these settings to unrelated applications.
+
+## Source patches
+
+Apply these in order to fresh [Wine 11.0 sources](https://github.com/wine-mirror/wine/tree/wine-11.0), from the source root:
+
+```sh
+patch --fuzz=0 -p1 < /path/to/patches/wine-opta.patch
+patch --fuzz=0 -p1 < /path/to/patches/wine-beforescript.patch
+patch --fuzz=0 -p1 < /path/to/patches/wine-uxtheme-griff.patch
+patch --fuzz=0 -p1 < /path/to/patches/wine-winex11-iconic.patch
 ```
-Connected to ArduinoOpta_1p2 on ARMThumb2_VFP2.
-Target runtime version: 1.34.2
-Target system info: 1.2.0 ArduinoOpta
-```
 
-*(Deutsche Fassung: [README.de.md](README.de.md))*
+All four patches were checked and applied to fresh upstream Wine 11.0 files without fuzzy matching. They are community patches, not upstream-accepted fixes, and need broader regression coverage before general Wine deployment.
 
-## Use version 1.1.0
+1. `wine-opta.patch`: embedded ActiveX/IDispatch and vararg handling, browser-emulation configuration, DOM/event and script compatibility.
+2. `wine-beforescript.patch`: emits BeforeScriptExecute before scripts run, allowing the host to initialize page variables.
+3. `wine-uxtheme-griff.patch`: rejects foreign/invalid theme handles instead of dereferencing them. Original skin remains enabled. Valid-handle and invalid-handle countertests accompanied the application tests.
+4. `wine-winex11-iconic.patch`: after mapping a managed, non-embedded window that requests initial IconicState, explicitly requests iconification once. No timer, launcher hide-loop or desktop-window-manager change.
 
-**PLC IDE 1.0.8 fails on startup with**
+For the last issue Wine reported a minimized Win32 window, but Muffin mapped it as X11 Normal. Wine treated that Normal notification as transient and kept waiting for Iconic. Original and unpatched-rebuild countertests reproduced it; the patched driver gave X11 Iconic/HIDDEN with the IDE still CONNECTED. A Windows reference also started the same CommServ binary minimized; its IDE was 1.0.8 rather than 1.1.0, so this was not an identical full-stack comparison.
 
-```
-Can not load device template 'LogicLab.pct' from Catalog!
-Resources configuration will not be loaded.
-```
+**Build/install for the architecture actually loaded.** The tested traditional WoW64 runtime loads `lib/wine/i386-unix/winex11.so` in the 32-bit IDE and CommServ, even though the machine/prefix are 64-bit. Updating only x86_64-unix does not test this correction. Verify `/proc/<pid>/maps`; new-WoW64 layouts may differ. The PE DLLs also need to match the process architecture. Build using Wine's normal dependencies and instructions, preserve originals, and replace files only after closing the dedicated runtime. No portable one-command binary installation is claimed here.
 
-The *Resources* section is then missing from the project tree — which is where
-the device and connection settings live — and connecting fails with „Unable to
-start the communication", without the IDE ever opening the serial port.
+## Installer and serial-port notes
 
-**The cause is Wine Gecko** (see below): that prefix had it installed. Remove it
-and 1.0.8 stops reporting the catalog error and loads the project tree too.
+The 1.1.0 WiX Burn installer contained an attached CAB in the tested download. Its bootstrapper did not install correctly under Wine. Find the attached container in your own installer rather than assuming a fixed offset:
 
-Ruled out beforehand, one at a time: missing files, path case sensitivity,
-MSXML, COM registration of all six components, XML validation in the template,
-the ToolkitPro library (byte-identical between versions), the
-`Arduino\ArduinoPLC\InstallPath` registry key, and fonts.
-
-**Still, prefer 1.1.0.** Even without Gecko, 1.0.8 stalls at „Loading resources
-tree…", and the rotated-text glitch in the Output pane (every character turned
-90°) only happens there. 1.1.0 fixes both.
-
-Version 1.0.3 is no alternative either: its catalog only knows
-`ArduinoOpta_1p0`, and fitted with newer device definitions it crashes when
-opening a project created with 1.0.8.
-
-## Problem 1: the 1.1.0 installer is only a downloader
-
-`Arduino-PLC-IDE-Installer_1.1.0_Windows_64bit.exe` is a WiX Burn bundle: it
-fetches the real packages at runtime and **exits immediately under Wine**, with
-no error message and nothing installed.
-
-You do not need a Windows machine to get around this. Of its 55 MB, only ~0.5 MB
-is the bootstrapper — the rest is an **attached CAB container** holding the real
-installers. Cut it out and unpack it:
-
-```bash
-# find the attached container (take the second MSCF offset)
+```sh
 grep -abo MSCF Arduino-PLC-IDE-Installer_1.1.0_Windows_64bit.exe
-
-# carve it out (replace 984408 with the offset you found) and unpack
-dd if=Arduino-PLC-IDE-Installer_1.1.0_Windows_64bit.exe bs=1 skip=984408 \
-   of=container.cab status=none
-cabextract container.cab          # yields a0 (MSI, tools) and a1 (the real setup)
-```
-
-`a1` is a plain 32-bit Inno Setup installer and installs under Wine without
-complaint:
-
-```bash
-wine a1 /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
-wine msiexec /i a0 /qn            # the tools package
-```
-
-Note: the installer refuses to do anything if an older PLC IDE is still
-installed — again without any message. Uninstall it first via
-`"…/Arduino PLC IDE/unins000.exe" /VERYSILENT`.
-
-## Problem 2: Wine rewrites the COM mapping while it boots
-
-Wine maps Windows ports (COM1, COM2, …) through symlinks in the prefix's
-`dosdevices` directory. An Opta appears as `/dev/ttyACM0` and `/dev/ttyACM1`,
-which Wine assigns to high numbers such as COM35/COM36 — numbers the IDE does
-not offer in its connection dialog.
-
-Symlinking them to low numbers *before* starting **does not work**: while
-booting, Wine enumerates the serial devices itself and overwrites
-`dosdevices/com*` with the built-in ports (`/dev/ttyS0`, `/dev/ttyS1`, …). The
-IDE then still lists COM1 and COM2, but there is a dead port behind them, and
-connecting fails with „Unable to start the communication". This is the trap that
-costs hours, because everything *looks* right.
-
-**Fix:** bring the Wine service up first, map the ports second.
-
-```bash
-wineserver -k          # stop running Wine processes
-wineserver -p          # keep the service alive, or it boots again
-wine wineboot          # Wine writes its own COM mapping here
-ln -sfn /dev/serial/by-id/usb-Arduino_Arduino_Opta_<serial>-if00 "$WINEPREFIX/dosdevices/com1"
-ln -sfn /dev/serial/by-id/usb-Arduino_Arduino_Opta_<serial>-if02 "$WINEPREFIX/dosdevices/com2"
-wine ".../Arduino PLC IDE.exe"
-```
-
-Use `/dev/serial/by-id/` rather than `/dev/ttyACM*` so the mapping survives
-reboots and replugging. `plc-ide.sh` does this in the right order.
-
-**Tip:** if an existing project insists on, say, COM5, it is far easier to point
-`dosdevices/com5` at the board than to fight the combo box in the connection
-dialog.
-
-## Do NOT install Wine Gecko
-
-This is the single most important setting, verified in both directions on
-2026-09-21:
-
-* **without Gecko**, 1.1.0 starts cleanly and connects to the Opta;
-* **with Gecko installed**, the „Can not load device template 'LogicLab.pct'
-  from Catalog" error comes straight back.
-
-When Wine offers to install Gecko for a new prefix, decline. If it is already
-there, renaming `drive_c/windows/system32/gecko` and
-`drive_c/windows/syswow64/gecko` is enough — the IDE does not need them.
-
-This also explains the 1.0.8 failure in hindsight: that prefix had Gecko
-installed. It is why `mshtml=d` appeared to help there — that override disables
-Wine's HTML engine, i.e. exactly what Gecko provides. It only hid the message
-though; the resource configuration still did not load.
-
-## Quick start
-
-```bash
-sudo usermod -a -G dialout "$USER"   # then log out and back in
-sudo apt remove brltty               # hijacks Arduino boards on USB
-
-export WINEPREFIX=~/.local/share/arduino-plc-ide/wine
-export WINEARCH=win64
-winetricks -q vcrun2019 msxml3 msxml6   # do NOT add wine_gecko
-# unpack the installer as shown above, then:
+# Use the verified attached-container offset from that file:
+dd if=Arduino-PLC-IDE-Installer_1.1.0_Windows_64bit.exe bs=1 skip=OFFSET of=container.cab status=none
+cabextract container.cab
+# In the tested bundle: a1 = Inno Setup; a0 = tools MSI.
+# Run with the explicitly selected dedicated Wine and WINEPREFIX:
 wine a1 /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
 wine msiexec /i a0 /qn
-
-chmod +x plc-ide.sh
-./plc-ide.sh 'C:\projects\demo\demo.plcprj'
 ```
 
-Launch with `WINEDLLOVERRIDES="mscoree=d"` (the script sets it).
+Use your own official Arduino installer; no Arduino binaries are redistributed. Resolve old-install conflicts only inside the dedicated prefix.
 
-## Finding the right port and settings — by measuring, not guessing
+Wine boot can overwrite `dosdevices/com*`. Start/initialize the **dedicated** Wine server first, then map the Opta's stable `/dev/serial/by-id/` interfaces to low COM numbers. In the tested setup if00 maps to COM1, if02 to COM2 and additionally COM5 for older project settings. `plc-ide.sh` is the existing COM-mapping helper; it does **not** install this patch set or select the patched runtime for you.
 
-The board exposes two serial interfaces. Which one answers, and with which
-parameters, can be measured before touching the GUI. `mbpoll` only reads:
+The tested connection used if02, Modbus RTU, 38400 baud, no parity, 8 data bits, 1 stop bit, address 247. Confirm the actual device configuration rather than treating these as universal defaults. Use On-line → Set up communication, then Connect. Do not use Download or reset actions as a connection test. `DIFF. CODE` is not an instruction to overwrite the running PLC program.
 
-```bash
-mbpoll -m rtu -b 38400 -P none -d 8 -s 1 -a 247 -t 4 -r 1 -c 1 -1 /dev/ttyACM1
-```
+Check serial access permissions (commonly the dialout group). Do not use blanket `chmod 666` or remove accessibility software such as brltty without diagnosing an actual conflict.
 
-If the device answers, port and parameters are confirmed — and you also know the
-PLC runtime is already installed, so you can skip the bootloader procedure
-entirely.
+## License and scope
 
-In the verified setup the **second** interface (`-if02`, here `/dev/ttyACM1`)
-answered with **38400 baud, no parity, 8 data bits, 1 stop bit, Modbus address
-247**. Values frequently quoted online — 115200, even parity, address 1 — got no
-response from this device. Measuring beats copying.
-
-Enter them under **On-line → Set up communication → Modbus → Properties**.
-
-## Linux permissions
-
-- **`dialout` group:** `sudo usermod -a -G dialout "$USER"`, then log out and in.
-- **Remove `brltty`:** a braille service that claims Arduino boards on USB and
-  makes the ports vanish: `sudo apt remove brltty`.
-
-`chmod 666 /dev/ttyACM*` is unnecessary once you are in `dialout`, and does not
-survive a reboot.
-
-## License
-
-MIT — see [LICENSE](LICENSE).
-
-Arduino, Opta and Portenta are trademarks of Arduino SA. This project is not
-affiliated with or endorsed by Arduino SA. No Arduino software is redistributed
-here; you need your own copy of the installer.
+Existing project helpers/documentation retain the [MIT license](LICENSE). Patches modifying Wine source are provided under Wine's LGPL-2.1-or-later terms; see [COPYING.Wine](COPYING.Wine) and the upstream source notices. No PLC application source, private installation paths, credentials or device identifiers are included in the new patch set. Arduino trademarks belong to their respective owners; this project is unaffiliated.

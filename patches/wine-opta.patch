@@ -1,0 +1,506 @@
+--- a/dlls/oleaut32/typelib.c	2026-01-13 16:56:07.000000000 +0100
++++ b/dlls/oleaut32/typelib.c	2026-09-23 01:15:37.330050101 +0200
+@@ -7245,7 +7245,9 @@
+                      * the retval parameter. however, there is an exception
+                      * where the extra parameter is used in an extra
+                      * IDispatch::Invoke below */
+-                    if ((i < pDispParams->cArgs) &&
++                    /* with a [vararg] parameter all remaining arguments were packed into
++                     * the SAFEARRAY, so more arguments than parameters are legitimate here */
++                    if ((i < pDispParams->cArgs) && func_desc->cParamsOpt >= 0 &&
+                         ((func_desc->cParams != 1) || !pVarResult ||
+                          !(func_desc->invkind & INVOKE_PROPERTYGET)))
+                     {
+@@ -7471,7 +7473,16 @@
+                 else if (vargs_converted < pDispParams->cArgs)
+                 {
+                     VARIANTARG *arg = &pDispParams->rgvarg[pDispParams->cArgs - 1 - vargs_converted];
+-                    if (wParamFlags & PARAMFLAG_FOUT)
++                    if (func_desc->cParamsOpt < 0 && (rgvt[i] & ~VT_BYREF) == (VT_VARIANT | VT_ARRAY))
++                    {
++                        /* [vararg] parameter: the SAFEARRAY was built from all remaining
++                         * arguments. Even if it is declared [in, out], never write it back
++                         * into the caller's first vararg argument. Ownership of the array is
++                         * left as before (the callee may have released it already). */
++                        V_VT(&rgvarg[i]) = VT_EMPTY;
++                        vargs_converted = pDispParams->cArgs - 1;
++                    }
++                    else if (wParamFlags & PARAMFLAG_FOUT)
+                     {
+                         if ((rgvt[i] & VT_BYREF) && !(V_VT(arg) & VT_BYREF))
+                         {
+--- a/dlls/mshtml/htmldoc.c	2026-01-13 16:56:07.000000000 +0100
++++ b/dlls/mshtml/htmldoc.c	2026-09-23 01:03:39.869011407 +0200
+@@ -5939,6 +5939,50 @@
+     return doc;
+ }
+ 
++/* Honour the native FEATURE_BROWSER_EMULATION feature control for the host process.
++ * Only the "forced" values (11001, 10001, 9999, 8888) are applied here: they make every
++ * document of the process start in that mode, independent of the host touching the
++ * document or window object before the markup (and its X-UA-Compatible meta) is parsed. */
++static compat_mode_t get_forced_browser_emulation_mode(void)
++{
++    static const WCHAR keyW[] = L"Software\\Microsoft\\Internet Explorer\\Main\\FeatureControl\\FEATURE_BROWSER_EMULATION";
++    static compat_mode_t cached = -2;
++    WCHAR path[MAX_PATH], *name;
++    DWORD value, size, type;
++    HKEY roots[2] = { HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE }, key;
++    compat_mode_t mode = COMPAT_MODE_INVALID;
++    unsigned int i;
++
++    if(cached != (compat_mode_t)-2)
++        return cached;
++
++    if(!GetModuleFileNameW(NULL, path, ARRAY_SIZE(path))) {
++        cached = COMPAT_MODE_INVALID;
++        return cached;
++    }
++    name = wcsrchr(path, '\\');
++    name = name ? name + 1 : path;
++
++    for(i = 0; i < ARRAY_SIZE(roots) && mode == COMPAT_MODE_INVALID; i++) {
++        if(RegOpenKeyExW(roots[i], keyW, 0, KEY_READ, &key))
++            continue;
++        size = sizeof(value);
++        if(!RegQueryValueExW(key, name, NULL, &type, (BYTE*)&value, &size) && type == REG_DWORD) {
++            switch(value) {
++            case 11001: mode = COMPAT_MODE_IE11; break;
++            case 10001: mode = COMPAT_MODE_IE10; break;
++            case 9999:  mode = COMPAT_MODE_IE9;  break;
++            case 8888:  mode = COMPAT_MODE_IE8;  break;
++            }
++            TRACE("FEATURE_BROWSER_EMULATION %s = %lu -> forced mode %d\n", debugstr_w(name), value, mode);
++        }
++        RegCloseKey(key);
++    }
++
++    cached = mode;
++    return cached;
++}
++
+ HRESULT create_document_node(nsIDOMDocument *nsdoc, GeckoBrowser *browser, HTMLInnerWindow *window,
+                              HTMLInnerWindow *script_global, compat_mode_t parent_mode, HTMLDocumentNode **ret)
+ {
+@@ -5954,6 +5998,12 @@
+         TRACE("using parent mode %u\n", parent_mode);
+         doc->document_mode = parent_mode;
+         lock_document_mode(doc);
++    }else {
++        compat_mode_t forced_mode = get_forced_browser_emulation_mode();
++        if(forced_mode != COMPAT_MODE_INVALID) {
++            TRACE("using forced browser emulation mode %u\n", forced_mode);
++            doc->document_mode = forced_mode;
++        }
+     }
+ 
+     if(doc_obj && (!doc_obj->window || (window && is_main_content_window(window->base.outer_window))))
+--- a/dlls/mshtml/htmlwindow.c	2026-01-13 16:56:07.000000000 +0100
++++ b/dlls/mshtml/htmlwindow.c	2026-09-23 03:24:29.919252245 +0200
+@@ -1411,6 +1411,7 @@
+ static HRESULT WINAPI HTMLWindow2_get_external(IHTMLWindow2 *iface, IDispatch **p)
+ {
+     HTMLWindow *This = impl_from_IHTMLWindow2(iface);
++    HRESULT hres;
+ 
+     TRACE("(%p)->(%p)\n", This, p);
+ 
+@@ -1422,7 +1423,17 @@
+     if(!This->outer_window->browser->doc->hostui)
+         return S_OK;
+ 
+-    return IDocHostUIHandler_GetExternal(This->outer_window->browser->doc->hostui, p);
++    hres = IDocHostUIHandler_GetExternal(This->outer_window->browser->doc->hostui, p);
++    if(SUCCEEDED(hres) && *p) {
++        /* Like native, use the object's real IDispatch interface. Some hosts return
++         * a pointer that is only a valid IUnknown (its vtable is not IDispatch). */
++        IDispatch *disp;
++        if(SUCCEEDED(IDispatch_QueryInterface(*p, &IID_IDispatch, (void**)&disp))) {
++            IDispatch_Release(*p);
++            *p = disp;
++        }
++    }
++    return hres;
+ }
+ 
+ static const IHTMLWindow2Vtbl HTMLWindow2Vtbl = {
+--- a/dlls/mshtml/mshtml_private.h	2026-01-13 16:56:07.000000000 +0100
++++ b/dlls/mshtml/mshtml_private.h	2026-09-23 04:41:00.914750869 +0200
+@@ -1191,6 +1191,7 @@
+     struct list selection_list;
+     struct list range_list;
+     struct list plugin_hosts;
++    BOOL navigate_complete_fired;  /* NavigateComplete2 already sent to the WebBrowser host */
+ };
+ 
+ HRESULT HTMLDocument_Create(IUnknown*,REFIID,void**);
+--- a/dlls/mshtml/pluginhost.c	2026-01-13 16:56:07.000000000 +0100
++++ b/dlls/mshtml/pluginhost.c	2026-09-23 04:17:07.083075635 +0200
+@@ -785,6 +785,131 @@
+     return S_OK;
+ }
+ 
++/* A callable wrapper returned when script reads a *method* of an embedded control as a
++ * value (jscript fetches the value first and then calls it). Calling it invokes the
++ * control's method with DISPATCH_METHOD, which is what native effectively does. */
++typedef struct {
++    IDispatch IDispatch_iface;
++    LONG ref;
++    IDispatch *target;
++    DISPID dispid;
++} PluginMethod;
++
++static inline PluginMethod *impl_from_PluginMethod(IDispatch *iface)
++{
++    return CONTAINING_RECORD(iface, PluginMethod, IDispatch_iface);
++}
++
++static HRESULT WINAPI PluginMethod_QueryInterface(IDispatch *iface, REFIID riid, void **ppv)
++{
++    if(IsEqualGUID(riid, &IID_IUnknown) || IsEqualGUID(riid, &IID_IDispatch)) {
++        *ppv = iface;
++        IDispatch_AddRef(iface);
++        return S_OK;
++    }
++    *ppv = NULL;
++    return E_NOINTERFACE;
++}
++
++static ULONG WINAPI PluginMethod_AddRef(IDispatch *iface)
++{
++    PluginMethod *This = impl_from_PluginMethod(iface);
++    return InterlockedIncrement(&This->ref);
++}
++
++static ULONG WINAPI PluginMethod_Release(IDispatch *iface)
++{
++    PluginMethod *This = impl_from_PluginMethod(iface);
++    LONG ref = InterlockedDecrement(&This->ref);
++    if(!ref) {
++        IDispatch_Release(This->target);
++        free(This);
++    }
++    return ref;
++}
++
++static HRESULT WINAPI PluginMethod_GetTypeInfoCount(IDispatch *iface, UINT *pctinfo)
++{
++    *pctinfo = 0;
++    return S_OK;
++}
++
++static HRESULT WINAPI PluginMethod_GetTypeInfo(IDispatch *iface, UINT iTInfo, LCID lcid, ITypeInfo **ppTInfo)
++{
++    return E_NOTIMPL;
++}
++
++static HRESULT WINAPI PluginMethod_GetIDsOfNames(IDispatch *iface, REFIID riid, LPOLESTR *names, UINT cnt,
++        LCID lcid, DISPID *ids)
++{
++    return DISP_E_UNKNOWNNAME;
++}
++
++static HRESULT WINAPI PluginMethod_Invoke(IDispatch *iface, DISPID id, REFIID riid, LCID lcid, WORD flags,
++        DISPPARAMS *params, VARIANT *res, EXCEPINFO *ei, UINT *argerr)
++{
++    PluginMethod *This = impl_from_PluginMethod(iface);
++    DISPPARAMS dp = {0};
++
++    TRACE("(%p)->(%ld %x)\n", This, id, flags);
++
++    if(id != DISPID_VALUE || !(flags & DISPATCH_METHOD))
++        return DISP_E_MEMBERNOTFOUND;
++
++    if(params)
++        dp = *params;
++    if(dp.cNamedArgs && dp.rgdispidNamedArgs[0] == DISPID_THIS) {
++        dp.cNamedArgs--;
++        dp.rgdispidNamedArgs = dp.cNamedArgs ? dp.rgdispidNamedArgs + 1 : NULL;
++        dp.cArgs--;
++        dp.rgvarg++;
++    }
++    /* like native script engines: METHOD|PROPERTYGET works for methods and indexed properties */
++    return IDispatch_Invoke(This->target, This->dispid, &IID_NULL, lcid, DISPATCH_METHOD|DISPATCH_PROPERTYGET,
++                            &dp, res, ei, argerr);
++}
++
++static const IDispatchVtbl PluginMethodVtbl = {
++    PluginMethod_QueryInterface,
++    PluginMethod_AddRef,
++    PluginMethod_Release,
++    PluginMethod_GetTypeInfoCount,
++    PluginMethod_GetTypeInfo,
++    PluginMethod_GetIDsOfNames,
++    PluginMethod_Invoke
++};
++
++/* Uses the control's type information to tell callable members (methods and
++ * parameterized properties) from plain properties. */
++static BOOL is_plugin_method(IDispatch *disp, DISPID id, LCID lcid)
++{
++    ITypeInfo *ti;
++    TYPEATTR *attr;
++    BOOL ret = FALSE, has_prop = FALSE;
++    UINT i;
++
++    if(FAILED(IDispatch_GetTypeInfo(disp, 0, lcid, &ti)))
++        return FALSE;
++    if(SUCCEEDED(ITypeInfo_GetTypeAttr(ti, &attr))) {
++        for(i = 0; i < attr->cFuncs; i++) {
++            FUNCDESC *fd;
++            if(FAILED(ITypeInfo_GetFuncDesc(ti, i, &fd)))
++                continue;
++            if(fd->memid == id) {
++                /* methods and parameterized property getters must be called with arguments */
++                if(fd->invkind == INVOKE_FUNC || (fd->invkind == INVOKE_PROPERTYGET && fd->cParams > 0))
++                    ret = TRUE;
++                else if(fd->invkind == INVOKE_PROPERTYGET)
++                    has_prop = TRUE;
++            }
++            ITypeInfo_ReleaseFuncDesc(ti, fd);
++        }
++        ITypeInfo_ReleaseTypeAttr(ti, attr);
++    }
++    ITypeInfo_Release(ti);
++    return ret && !has_prop;
++}
++
+ HRESULT HTMLPluginContainer_invoke(DispatchEx *dispex, DISPID id, LCID lcid, WORD flags, DISPPARAMS *params,
+                                    VARIANT *res, EXCEPINFO *ei, IServiceProvider *caller)
+ {
+@@ -809,6 +934,34 @@
+         return E_FAIL;
+     }
+ 
++    if(flags == DISPATCH_PROPERTYGET && res &&
++       is_plugin_method(host->disp, plugin_container->props[id-MSHTML_DISPID_CUSTOM_MIN]->id, lcid)) {
++        PluginMethod *method = malloc(sizeof(*method));
++        if(!method)
++            return E_OUTOFMEMORY;
++        method->IDispatch_iface.lpVtbl = &PluginMethodVtbl;
++        method->ref = 1;
++        method->target = host->disp;
++        IDispatch_AddRef(host->disp);
++        method->dispid = plugin_container->props[id-MSHTML_DISPID_CUSTOM_MIN]->id;
++        V_VT(res) = VT_DISPATCH;
++        V_DISPATCH(res) = &method->IDispatch_iface;
++        return S_OK;
++    }
++
++    /* Plain IDispatch objects (e.g. MFC ActiveX controls) don't understand the DISPID_THIS
++     * named argument added by the script engine; native strips it, like jscript does for
++     * IDispatch calls. */
++    if(params && params->cNamedArgs && params->rgdispidNamedArgs[0] == DISPID_THIS) {
++        DISPPARAMS stripped = *params;
++        stripped.cNamedArgs--;
++        stripped.rgdispidNamedArgs = stripped.cNamedArgs ? params->rgdispidNamedArgs + 1 : NULL;
++        stripped.cArgs--;
++        stripped.rgvarg = params->rgvarg + 1;
++        return IDispatch_Invoke(host->disp, plugin_container->props[id-MSHTML_DISPID_CUSTOM_MIN]->id, &IID_NULL,
++                lcid, flags, &stripped, res, ei, NULL);
++    }
++
+     return IDispatch_Invoke(host->disp, plugin_container->props[id-MSHTML_DISPID_CUSTOM_MIN]->id, &IID_NULL,
+             lcid, flags, params, res, ei, NULL);
+ }
+@@ -833,7 +986,9 @@
+     }
+ 
+     desc->id = id;
+-    desc->flags = 0;
++    /* Properties of embedded controls are writable from script (e.g. grid.EventResult = x);
++     * with flags 0 jscript would silently ignore such assignments. */
++    desc->flags = PROPF_WRITABLE | PROPF_ENUMERABLE;
+     desc->name = plugin_container->props[id - MSHTML_DISPID_CUSTOM_MIN]->name;
+     desc->iid = 0;
+     return S_OK;
+--- a/dlls/mshtml/htmlobject.c	2026-01-13 16:56:07.000000000 +0100
++++ b/dlls/mshtml/htmlobject.c	2026-09-23 04:05:08.447729158 +0200
+@@ -26,6 +26,7 @@
+ #include "winreg.h"
+ #include "ole2.h"
+ #include "mshtmdid.h"
++#include "activscp.h"
+ 
+ #include "wine/debug.h"
+ 
+@@ -41,6 +42,7 @@
+     IHTMLObjectElement IHTMLObjectElement_iface;
+     IHTMLObjectElement2 IHTMLObjectElement2_iface;
+     IWineHTMLObjectPrivate IWineHTMLObjectPrivate_iface;
++    IBindEventHandler IBindEventHandler_iface;
+ 
+     nsIDOMHTMLObjectElement *nsobject;
+ };
+@@ -656,6 +658,48 @@
+     return CONTAINING_RECORD(iface, HTMLObjectElement, plugin_container.element.node.event_target.dispex);
+ }
+ 
++/* IBindEventHandler: used by jscript to bind "function obj::event()" handlers
++ * to the events of an embedded ActiveX control. */
++static inline HTMLObjectElement *impl_from_IBindEventHandler(IBindEventHandler *iface)
++{
++    return CONTAINING_RECORD(iface, HTMLObjectElement, IBindEventHandler_iface);
++}
++
++static HRESULT WINAPI HTMLObjectBindEventHandler_QueryInterface(IBindEventHandler *iface, REFIID riid, void **ppv)
++{
++    HTMLObjectElement *This = impl_from_IBindEventHandler(iface);
++    return IHTMLObjectElement_QueryInterface(&This->IHTMLObjectElement_iface, riid, ppv);
++}
++
++static ULONG WINAPI HTMLObjectBindEventHandler_AddRef(IBindEventHandler *iface)
++{
++    HTMLObjectElement *This = impl_from_IBindEventHandler(iface);
++    return IHTMLObjectElement_AddRef(&This->IHTMLObjectElement_iface);
++}
++
++static ULONG WINAPI HTMLObjectBindEventHandler_Release(IBindEventHandler *iface)
++{
++    HTMLObjectElement *This = impl_from_IBindEventHandler(iface);
++    return IHTMLObjectElement_Release(&This->IHTMLObjectElement_iface);
++}
++
++static HRESULT WINAPI HTMLObjectBindEventHandler_BindHandler(IBindEventHandler *iface, const WCHAR *event, IDispatch *disp)
++{
++    HTMLObjectElement *This = impl_from_IBindEventHandler(iface);
++
++    TRACE("(%p)->(%s %p)\n", This, debugstr_w(event), disp);
++
++    bind_activex_event(This->plugin_container.element.node.doc, &This->plugin_container, (WCHAR*)event, disp);
++    return S_OK;
++}
++
++static const IBindEventHandlerVtbl HTMLObjectBindEventHandlerVtbl = {
++    HTMLObjectBindEventHandler_QueryInterface,
++    HTMLObjectBindEventHandler_AddRef,
++    HTMLObjectBindEventHandler_Release,
++    HTMLObjectBindEventHandler_BindHandler
++};
++
+ static void *HTMLObjectElement_query_interface(DispatchEx *dispex, REFIID riid)
+ {
+     HTMLObjectElement *This = impl_from_DispatchEx(dispex);
+@@ -667,6 +711,8 @@
+         return &This->IHTMLObjectElement2_iface;
+     if(IsEqualGUID(&IID_IWineHTMLObjectPrivate, riid))
+         return &This->IWineHTMLObjectPrivate_iface;
++    if(IsEqualGUID(&IID_IBindEventHandler, riid))
++        return &This->IBindEventHandler_iface;
+     if(IsEqualGUID(&IID_HTMLPluginContainer, riid)) {
+         /* Special pseudo-interface returning HTMLPluginContainer struct. */
+         return &This->plugin_container;
+@@ -775,6 +821,7 @@
+     ret->IHTMLObjectElement_iface.lpVtbl = &HTMLObjectElementVtbl;
+     ret->IHTMLObjectElement2_iface.lpVtbl = &HTMLObjectElement2Vtbl;
+     ret->IWineHTMLObjectPrivate_iface.lpVtbl = &WineHTMLObjectPrivateVtbl;
++    ret->IBindEventHandler_iface.lpVtbl = &HTMLObjectBindEventHandlerVtbl;
+     ret->plugin_container.element.node.vtbl = &HTMLObjectElementImplVtbl;
+ 
+     HTMLElement_Init(&ret->plugin_container.element, doc, nselem, &HTMLObjectElement_dispex);
+--- a/dlls/mshtml/dispex.c	2026-01-13 16:56:07.000000000 +0100
++++ b/dlls/mshtml/dispex.c	2026-09-23 04:26:17.573581662 +0200
+@@ -3496,6 +3496,25 @@
+                       dispex_compat_mode(&script_global->event_target.dispex));
+         constr->id = id;
+         script_global->constructors[id] = &constr->dispex;
++
++        /* DOM Level 2 node type constants (Node.ELEMENT_NODE etc.), used by scripts to
++         * filter NodeList entries. */
++        if(id == OBJID_Node && constr->dispex.jsdisp) {
++            static const struct { const WCHAR *name; int value; } node_consts[] = {
++                { L"ELEMENT_NODE", 1 }, { L"ATTRIBUTE_NODE", 2 }, { L"TEXT_NODE", 3 },
++                { L"CDATA_SECTION_NODE", 4 }, { L"ENTITY_REFERENCE_NODE", 5 }, { L"ENTITY_NODE", 6 },
++                { L"PROCESSING_INSTRUCTION_NODE", 7 }, { L"COMMENT_NODE", 8 }, { L"DOCUMENT_NODE", 9 },
++                { L"DOCUMENT_TYPE_NODE", 10 }, { L"DOCUMENT_FRAGMENT_NODE", 11 }, { L"NOTATION_NODE", 12 },
++            };
++            unsigned int i;
++            VARIANT v;
++
++            for(i = 0; i < ARRAY_SIZE(node_consts); i++) {
++                V_VT(&v) = VT_I4;
++                V_I4(&v) = node_consts[i].value;
++                IWineJSDispatch_DefineProperty(constr->dispex.jsdisp, node_consts[i].name, PROPF_ENUMERABLE, &v);
++            }
++        }
+     }
+ 
+     *ret = script_global->constructors[id];
+--- a/dlls/mshtml/navigate.c	2026-01-13 16:56:07.000000000 +0100
++++ b/dlls/mshtml/navigate.c	2026-09-23 04:39:28.406475063 +0200
+@@ -1021,6 +1021,20 @@
+         if(This->bsc.window->base.outer_window->readystate != READYSTATE_LOADING &&
+            This->bsc.window->base.outer_window->browser->doc)
+             set_ready_state(This->bsc.window->base.outer_window, READYSTATE_LOADING);
++
++        /* Native fires NavigateComplete2 once the new document exists, before its markup is
++         * parsed and its scripts run. Hosts use it to prepare the page (e.g. define script
++         * variables that inline scripts expect). */
++        {
++            HTMLDocumentObj *doc_obj = This->bsc.window->base.outer_window->browser->doc;
++            HTMLDocumentNode *doc = This->bsc.window->doc;
++            if(doc_obj && doc_obj->webbrowser && doc_obj->doc_object_service && doc_obj->doc_node == doc &&
++               !(This->bsc.window->base.outer_window->load_flags & BINDING_REFRESH)) {
++                doc->navigate_complete_fired = TRUE;
++                IDocObjectService_FireNavigateComplete2(doc_obj->doc_object_service,
++                        &This->bsc.window->base.IHTMLWindow2_iface, 0);
++            }
++        }
+     }
+ 
+     return S_OK;
+--- a/dlls/mshtml/mutation.c	2026-01-13 16:56:07.000000000 +0100
++++ b/dlls/mshtml/mutation.c	2026-09-23 04:39:28.406643216 +0200
+@@ -283,7 +283,8 @@
+     call_property_onchanged(&doc->cp_container, 1005);
+     call_explorer_69(doc);
+ 
+-    if(doc->webbrowser && !(doc->window->load_flags & BINDING_REFRESH))
++    if(doc->webbrowser && !(doc->window->load_flags & BINDING_REFRESH) &&
++       !(doc->doc_node && doc->doc_node->navigate_complete_fired))
+         IDocObjectService_FireNavigateComplete2(doc->doc_object_service, &doc->window->base.IHTMLWindow2_iface, 0);
+ 
+     /* FIXME: IE7 calls EnableModelless(TRUE), EnableModelless(FALSE) and sets interactive state here */
+--- a/dlls/ieframe/dochost.c	2026-01-13 16:56:07.000000000 +0100
++++ b/dlls/ieframe/dochost.c	2026-09-23 04:37:50.882582575 +0200
+@@ -621,7 +621,9 @@
+         IOleObject_Release(oleobj);
+     }
+ 
+-    refresh_document(This, NULL);
++    /* Native does not reload the document on UI activation. The document was already told to
++     * navigate above; reloading here aborts that navigation (the reload then never fires
++     * NavigateComplete2/DocumentComplete, which hosts rely on to set up the page). */
+ 
+     if(This->view)
+         IOleDocumentView_UIActivate(This->view, TRUE);
+--- a/dlls/jscript/engine.c	2026-01-13 16:56:07.000000000 +0100
++++ b/dlls/jscript/engine.c	2026-09-23 04:08:19.374642194 +0200
+@@ -3333,6 +3333,14 @@
+ 
+     disp = get_object(v);
+     hres = IDispatch_QueryInterface(disp, &IID_IBindEventHandler, (void**)&target);
++    if(FAILED(hres)) {
++        /* Host (e.g. mshtml) objects are wrapped in jscript objects; ask the host object. */
++        IWineJSDispatchHost *host = get_host_dispatch(disp);
++        if(host) {
++            hres = IWineJSDispatchHost_QueryInterface(host, &IID_IBindEventHandler, (void**)&target);
++            IWineJSDispatchHost_Release(host);
++        }
++    }
+     if(SUCCEEDED(hres)) {
+         hres = IBindEventHandler_BindHandler(target, func->name, to_disp(func_obj));
+         IBindEventHandler_Release(target);
+--- a/dlls/jscript/parser.y	2026-01-13 16:56:07.000000000 +0100
++++ b/dlls/jscript/parser.y	2026-09-23 04:21:06.437954143 +0200
+@@ -449,6 +449,10 @@
+                                 { $$ = new_forin_statement(ctx, @$, NULL, $3, $5, $7); }
+         | kFOR left_bracket kVAR VariableDeclarationNoIn kIN Expression_err right_bracket Statement
+                                 { $$ = new_forin_statement(ctx, @$,  $4, NULL, $6, $8); }
++        | kFOR left_bracket kLET VariableDeclarationNoIn kIN Expression_err right_bracket Statement
++                                { $$ = new_forin_statement(ctx, @$,  $4, NULL, $6, $8); }
++        | kFOR left_bracket kCONST VariableDeclarationNoIn kIN Expression_err right_bracket Statement
++                                { $$ = new_forin_statement(ctx, @$,  $4, NULL, $6, $8); }
+         | kFOR left_bracket LexicalDeclarationNoIn
+                                 { if(!explicit_error(ctx, $3, ';')) YYABORT; }
+           Expression_opt

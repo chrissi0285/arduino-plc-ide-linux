@@ -1,0 +1,332 @@
+--- a/dlls/uxtheme/draw.c	2026-09-23 23:12:10.035423114 +0200
++++ b/dlls/uxtheme/draw.c	2026-09-23 23:53:12.421772861 +0200
+@@ -1094,7 +1094,7 @@
+     RECT rt;
+ 
+     TRACE("(%p,%p,%d,%d,%ld,%ld)\n", hTheme, hdc, iPartId, iStateId,pRect->left,pRect->top);
+-    if(!hTheme)
++    if(!MSSTYLES_IsThemeClass(hTheme))
+         return E_HANDLE;
+ 
+     GetThemeEnumValue(hTheme, iPartId, iStateId, TMT_BGTYPE, &bgtype);
+@@ -1676,7 +1676,7 @@
+     TRACE("%p %p %d %d %s 0x%08x 0x%08x %s\n", hTheme, hdc, iPartId, iStateId,
+           wine_dbgstr_rect(pDestRect), uEdge, uFlags, wine_dbgstr_rect(pContentRect));
+ 
+-    if(!hTheme)
++    if(!MSSTYLES_IsThemeClass(hTheme))
+         return E_HANDLE;
+      
+     if(uFlags & BF_DIAGONAL)
+@@ -1702,7 +1702,7 @@
+     TRACE("%p %p %d %d %s %p %d\n", hTheme, hdc, iPartId, iStateId, wine_dbgstr_rect(pRect), himl,
+           iImageIndex);
+ 
+-    if (!hTheme)
++    if(!MSSTYLES_IsThemeClass(hTheme))
+         return E_HANDLE;
+ 
+     GetThemeEnumValue(hTheme, iPartId, iStateId, TMT_ICONEFFECT, &effect);
+@@ -1787,7 +1787,7 @@
+     TRACE("%p %p %d %d %s:%d 0x%08lx %p %p\n", hTheme, hdc, iPartId, iStateId,
+         debugstr_wn(pszText, iCharCount), iCharCount, flags, rect, options);
+ 
+-    if(!hTheme)
++    if(!MSSTYLES_IsThemeClass(hTheme))
+         return E_HANDLE;
+ 
+     if(options) {
+@@ -1839,7 +1839,7 @@
+     HRESULT hr;
+ 
+     TRACE("(%d,%d)\n", iPartId, iStateId);
+-    if(!hTheme)
++    if(!MSSTYLES_IsThemeClass(hTheme))
+         return E_HANDLE;
+ 
+     /* try content margins property... */
+@@ -1887,7 +1887,7 @@
+     HRESULT hr;
+ 
+     TRACE("(%d,%d)\n", iPartId, iStateId);
+-    if(!hTheme)
++    if(!MSSTYLES_IsThemeClass(hTheme))
+         return E_HANDLE;
+ 
+     /* try content margins property... */
+@@ -2052,7 +2052,7 @@
+     int bgtype = BT_BORDERFILL;
+ 
+     TRACE("(%p,%p,%d,%d)\n", hTheme, hdc, iPartId, iStateId);
+-    if(!hTheme)
++    if(!MSSTYLES_IsThemeClass(hTheme))
+         return E_HANDLE;
+     if(!pRect || !pRegion)
+         return E_POINTER;
+@@ -2131,7 +2131,7 @@
+     HRESULT hr = S_OK;
+     POINT size = {1, 1};
+ 
+-    if(!hTheme)
++    if(!MSSTYLES_IsThemeClass(hTheme))
+         return E_HANDLE;
+ 
+     GetThemeEnumValue(hTheme, iPartId, iStateId, TMT_BGTYPE, &bgtype);
+@@ -2167,7 +2167,7 @@
+     RECT rt = {0,0,0xFFFF,0xFFFF};
+     
+     TRACE("%d %d\n", iPartId, iStateId);
+-    if(!hTheme)
++    if(!MSSTYLES_IsThemeClass(hTheme))
+         return E_HANDLE;
+ 
+     if(pBoundingRect)
+@@ -2204,7 +2204,7 @@
+     LOGFONTW logfont;
+ 
+     TRACE("(%p, %p, %d, %d)\n", hTheme, hdc, iPartId, iStateId);
+-    if(!hTheme)
++    if(!MSSTYLES_IsThemeClass(hTheme))
+         return E_HANDLE;
+ 
+     hr = GetThemeFont(hTheme, hdc, iPartId, iStateId, TMT_FONT, &logfont);
+@@ -2242,7 +2242,7 @@
+ 
+     TRACE("(%d,%d)\n", iPartId, iStateId);
+ 
+-    if(!hTheme)
++    if(!MSSTYLES_IsThemeClass(hTheme))
+         return FALSE;
+ 
+     GetThemeEnumValue(hTheme, iPartId, iStateId, TMT_BGTYPE, &bgtype);
+--- a/dlls/uxtheme/property.c	2026-09-23 23:12:10.036710628 +0200
++++ b/dlls/uxtheme/property.c	2026-09-23 23:53:12.421772861 +0200
+@@ -43,7 +43,7 @@
+     PTHEME_PROPERTY tp;
+ 
+     TRACE("(%d, %d, %d)\n", iPartId, iStateId, iPropId);
+-    if(!hTheme)
++    if(!MSSTYLES_IsThemeClass(hTheme))
+         return E_HANDLE;
+ 
+     if(!(tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_BOOL, iPropId)))
+@@ -60,7 +60,7 @@
+     PTHEME_PROPERTY tp;
+ 
+     TRACE("(%d, %d, %d)\n", iPartId, iStateId, iPropId);
+-    if(!hTheme)
++    if(!MSSTYLES_IsThemeClass(hTheme))
+         return E_HANDLE;
+ 
+     if(!(tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_COLOR, iPropId)))
+@@ -79,7 +79,7 @@
+     PTHEME_PROPERTY tp;
+ 
+     TRACE("(%d, %d, %d)\n", iPartId, iStateId, iPropId);
+-    if(!hTheme)
++    if(!MSSTYLES_IsThemeClass(hTheme))
+         return E_HANDLE;
+ 
+     if(!(tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_ENUM, iPropId)))
+@@ -103,7 +103,7 @@
+     PTHEME_PROPERTY tp;
+ 
+     TRACE("(%d, %d, %d)\n", iPartId, iStateId, iPropId);
+-    if(!hTheme)
++    if(!MSSTYLES_IsThemeClass(hTheme))
+         return E_HANDLE;
+ 
+     if(!(tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_FILENAME, iPropId)))
+@@ -120,7 +120,7 @@
+     PTHEME_PROPERTY tp;
+ 
+     TRACE("(%d, %d, %d)\n", iPartId, iStateId, iPropId);
+-    if(!hTheme)
++    if(!MSSTYLES_IsThemeClass(hTheme))
+         return E_HANDLE;
+ 
+     if(!(tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_FONT, iPropId)))
+@@ -137,7 +137,7 @@
+     PTHEME_PROPERTY tp;
+ 
+     TRACE("(%d, %d, %d)\n", iPartId, iStateId, iPropId);
+-    if(!hTheme)
++    if(!MSSTYLES_IsThemeClass(hTheme))
+         return E_HANDLE;
+ 
+     if(!(tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_INT, iPropId)))
+@@ -154,7 +154,7 @@
+     PTHEME_PROPERTY tp;
+ 
+     TRACE("(%d, %d, %d)\n", iPartId, iStateId, iPropId);
+-    if(!hTheme)
++    if(!MSSTYLES_IsThemeClass(hTheme))
+         return E_HANDLE;
+ 
+     if(!(tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_INTLIST, iPropId)))
+@@ -171,7 +171,7 @@
+     PTHEME_PROPERTY tp;
+ 
+     TRACE("(%d, %d, %d)\n", iPartId, iStateId, iPropId);
+-    if(!hTheme)
++    if(!MSSTYLES_IsThemeClass(hTheme))
+         return E_HANDLE;
+ 
+     if(!(tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_POSITION, iPropId)))
+@@ -188,7 +188,7 @@
+     PTHEME_PROPERTY tp;
+ 
+     TRACE("(%d, %d, %d)\n", iPartId, iStateId, iPropId);
+-    if(!hTheme)
++    if(!MSSTYLES_IsThemeClass(hTheme))
+         return E_HANDLE;
+ 
+     if(!(tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_RECT, iPropId)))
+@@ -205,7 +205,7 @@
+     PTHEME_PROPERTY tp;
+ 
+     TRACE("(%d, %d, %d)\n", iPartId, iStateId, iPropId);
+-    if(!hTheme)
++    if(!MSSTYLES_IsThemeClass(hTheme))
+         return E_HANDLE;
+ 
+     if(!(tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_STRING, iPropId)))
+@@ -224,7 +224,7 @@
+ 
+     TRACE("(%d, %d, %d)\n", iPartId, iStateId, iPropId);
+     memset (pMargins, 0, sizeof (MARGINS));
+-    if(!hTheme)
++    if(!MSSTYLES_IsThemeClass(hTheme))
+         return E_HANDLE;
+ 
+     if(!(tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_MARGINS, iPropId)))
+@@ -243,7 +243,7 @@
+     HRESULT hr;
+ 
+     TRACE("(%d, %d, %d)\n", iPartId, iStateId, iPropId);
+-    if(!hTheme)
++    if(!MSSTYLES_IsThemeClass(hTheme))
+         return E_HANDLE;
+ 
+     if(!(tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, 0, iPropId)))
+@@ -283,7 +283,7 @@
+     PTHEME_PROPERTY tp;
+ 
+     TRACE("(%d, %d, %d)\n", iPartId, iStateId, iPropId);
+-    if(!hTheme)
++    if(!MSSTYLES_IsThemeClass(hTheme))
+         return E_HANDLE;
+ 
+     if(!(tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, 0, iPropId))) {
+--- a/dlls/uxtheme/metric.c	2026-09-23 23:12:10.038238916 +0200
++++ b/dlls/uxtheme/metric.c	2026-09-23 23:53:12.421772861 +0200
+@@ -147,7 +147,7 @@
+     PTHEME_PROPERTY tp;
+ 
+     TRACE("(%p, %d)\n", hTheme, iIntID);
+-    if(!hTheme)
++    if(!MSSTYLES_IsThemeClass(hTheme))
+         return E_HANDLE;
+     if(iIntID < TMT_FIRSTINT || iIntID > TMT_LASTINT) {
+         WARN("Unknown IntID: %d\n", iIntID);
+@@ -211,7 +211,7 @@
+     PTHEME_PROPERTY tp;
+ 
+     TRACE("(%p, %d)\n", hTheme, iStringID);
+-    if(!hTheme)
++    if(!MSSTYLES_IsThemeClass(hTheme))
+         return E_HANDLE;
+     if(iStringID < TMT_FIRSTSTRING || iStringID > TMT_LASTSTRING) {
+         WARN("Unknown StringID: %d\n", iStringID);
+--- a/dlls/uxtheme/msstyles.c	2026-09-23 23:12:10.039427796 +0200
++++ b/dlls/uxtheme/msstyles.c	2026-09-23 23:53:12.421772861 +0200
+@@ -1107,6 +1107,39 @@
+ }
+ 
+ /***********************************************************************
++ *      MSSTYLES_IsThemeClass
++ *
++ * Check that a HTHEME is a theme class handed out by OpenThemeData.
++ *
++ * NOTES
++ *  Applications may pass handles that did not come from uxtheme, for example
++ *  when a skinning library hooks only some of the theme functions of a module.
++ *  Such handles must be rejected with E_HANDLE instead of being dereferenced.
++ */
++BOOL MSSTYLES_IsThemeClass(HTHEME theme)
++{
++    PTHEME_CLASS tc = theme;
++    BOOL ret;
++
++    if (!tc)
++        return FALSE;
++
++    __TRY
++    {
++        ret = tc->signature == THEME_CLASS_SIGNATURE;
++    }
++    __EXCEPT_PAGE_FAULT
++    {
++        ret = FALSE;
++    }
++    __ENDTRY
++
++    if (!ret)
++        WARN("Invalid theme class handle %p\n", theme);
++    return ret;
++}
++
++/***********************************************************************
+  *      MSSTYLES_CloseThemeClass
+  *
+  * Close a theme class
+@@ -1122,18 +1155,7 @@
+ {
+     LONG refcount;
+ 
+-    __TRY
+-    {
+-        if (tc->signature != THEME_CLASS_SIGNATURE)
+-            tc = NULL;
+-    }
+-    __EXCEPT_PAGE_FAULT
+-    {
+-        tc = NULL;
+-    }
+-    __ENDTRY
+-
+-    if (!tc)
++    if (!MSSTYLES_IsThemeClass(tc))
+     {
+         WARN("Invalid theme class handle\n");
+         return E_HANDLE;
+--- a/dlls/uxtheme/msstyles.h	2026-09-23 23:12:10.040912342 +0200
++++ b/dlls/uxtheme/msstyles.h	2026-09-23 23:53:00.035895387 +0200
+@@ -95,6 +95,7 @@
+ HRESULT MSSTYLES_SetActiveTheme(PTHEME_FILE tf, BOOL setMetrics);
+ PTHEME_CLASS MSSTYLES_OpenThemeClass(LPCWSTR pszAppName, LPCWSTR pszClassList, UINT dpi);
+ HRESULT MSSTYLES_CloseThemeClass(PTHEME_CLASS tc);
++BOOL MSSTYLES_IsThemeClass(HTHEME theme);
+ BOOL MSSTYLES_LookupProperty(LPCWSTR pszPropertyName, int *dwPrimitive, int *dwId);
+ BOOL MSSTYLES_LookupEnum(LPCWSTR pszValueName, int dwEnum, int *dwValue);
+ BOOL MSSTYLES_LookupPartState(LPCWSTR pszClass, LPCWSTR pszPart, LPCWSTR pszState, int *iPartId, int *iStateId);
+--- a/dlls/uxtheme/system.c	2026-09-23 23:12:10.042577860 +0200
++++ b/dlls/uxtheme/system.c	2026-09-23 23:53:12.421772861 +0200
+@@ -789,7 +789,7 @@
+                                      POINT ptTest, WORD *pwHitTestCode)
+ {
+     FIXME("%d %d 0x%08lx: stub\n", iPartId, iStateId, dwOptions);
+-    if(!hTheme)
++    if(!MSSTYLES_IsThemeClass(hTheme))
+         return E_HANDLE;
+     return E_NOTIMPL;
+ }
+@@ -800,7 +800,7 @@
+ BOOL WINAPI IsThemePartDefined(HTHEME hTheme, int iPartId, int iStateId)
+ {
+     TRACE("(%p,%d,%d)\n", hTheme, iPartId, iStateId);
+-    if(!hTheme) {
++    if(!MSSTYLES_IsThemeClass(hTheme)) {
+         SetLastError(E_HANDLE);
+         return FALSE;
+     }

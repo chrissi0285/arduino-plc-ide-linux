@@ -1,0 +1,13 @@
+--- a/dlls/winex11.drv/window.c
++++ b/dlls/winex11.drv/window.c
+@@ -1628,6 +1628,10 @@
+     case MAKELONG(IconicState, NormalState):
+         if (data->embedded) set_xembed_flags( data, XEMBED_MAPPED );
+         else XMapWindow( data->display, data->whole_window );
++        /* Some WMs (e.g. Muffin) ignore the IconicState initial_state hint and map the window
++         * normally, the NormalState is then ignored as transient; request the iconic state. */
++        if (new_state == IconicState && data->managed && !data->embedded)
++            XIconifyWindow( data->display, data->whole_window, data->vis.screen );
+         break;
+     case MAKELONG(NormalState, WithdrawnState):
+     case MAKELONG(IconicState, WithdrawnState):
